@@ -1,3 +1,4 @@
+// Modified by Shaling AI in 2026.
 package com.cloudwebrtc.webrtc;
 
 import static com.cloudwebrtc.webrtc.utils.MediaConstraintsUtils.parseMediaConstraints;
@@ -216,6 +217,9 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
                     .setEnableInternalTracer(true)
                     .setInjectableLogger(logSink, logSeverity)
                     .createInitializationOptions());
+
+    // Shaling AI fork patch: avoid forced cellular requests on affected Huawei systems.
+    org.webrtc.HuaweiNetworkChangeDetector.installIfNeeded();
 
     getUserMediaImpl = new GetUserMediaImpl(this, context);
 
