@@ -86,6 +86,28 @@ the graph. `livekit_client` pins `WebRTC-SDK` in its own podspec, so an app that
 **Validation.** No unit test can reach this path. Validate on a physical iOS device: start a call that publishes the
 microphone, background the app, and end the call while it is in the background. Repeat several times.
 
+### W2: Passive network monitoring on older Huawei and Honor Android
+
+On Huawei and Honor devices running API 23–29, callback registration can throw
+`ConnectivityManager.TooManyRequestsException`. When this escapes the Java
+network monitor through JNI, WebRTC aborts the application process.
+
+The Android factory installs a passive detector before monitoring starts. It
+uses the pinned WebRTC network conversion delegate, avoids a forced cellular
+`requestNetwork`, and retains connectivity broadcasts if a passive callback is
+rejected for quota or permission reasons. It enumerates current networks rather
+than relying on a callback-only cache. Other manufacturers and Android versions
+retain the upstream detector, and an already active detector is never replaced.
+
+Only successfully acquired resources are released. Notifications stop before
+cleanup, and receiver cleanup is attempted even if callback release fails.
+Unexpected registration errors remain visible, including rollback errors as
+suppressed exceptions. The Android WebRTC binary version remains unchanged.
+
+The Android boundary tests and their invocation are documented in
+[`android/network-monitor-tests`](android/network-monitor-tests/README.md).
+Physical-device network changes and call audio still require separate acceptance.
+
 ## Consumers
 
 ```yaml
