@@ -17,9 +17,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Passive monitoring for Huawei Android 10 and earlier. These systems can retain
- * forced cellular requests across process deaths until their per-UID quota is
- * exhausted. Never request an additional cellular network just to observe it.
+ * Passive monitoring for Huawei Android 10 and earlier. Network callback
+ * registration can be rejected when the system's per-UID quota is exhausted.
+ * Never request an additional cellular network just to observe it.
  *
  * Uses the network conversion delegate from the pinned WebRTC 144.7559.09 API.
  * Other devices keep the upstream detector and its behavior unchanged.
@@ -70,14 +70,20 @@ public final class HuaweiNetworkChangeDetector extends BroadcastReceiver
       @Override public void onLost(Network network) {
         synchronized (HuaweiNetworkChangeDetector.this) {
           if (destroyed) return;
-          knownNetworks.remove(network.getNetworkHandle());
-          observer.onNetworkDisconnect(network.getNetworkHandle());
+          if (knownNetworks.remove(network.getNetworkHandle()) != null) {
+            observer.onNetworkDisconnect(network.getNetworkHandle());
+          }
           updateConnectionType();
         }
       }
     };
     registration = new PassiveNetworkRegistration(
         () -> delegate.registerNetworkCallback(callback), () -> delegate.releaseCallback(callback));
+    // Shaling AI fork patch: include the initial native network snapshot when
+    // detecting a loss before the first callback or connectivity broadcast.
+    for (NetworkInformation network : getActiveNetworkList()) {
+      knownNetworks.put(network.handle, network);
+    }
     context.registerReceiver(this, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
     receiverRegistered = true;
     try {
@@ -85,9 +91,15 @@ public final class HuaweiNetworkChangeDetector extends BroadcastReceiver
         Logging.w(TAG, "Network callback unavailable; retaining connectivity broadcast fallback");
       }
     } catch (RuntimeException error) {
-      // Do not leave a receiver behind if an unrelated registration error occurs.
-      context.unregisterReceiver(this);
-      receiverRegistered = false;
+      // Shaling AI fork patch: preserve the registration failure if rollback
+      // also fails, and prevent a retained receiver from sending notifications.
+      destroyed = true;
+      try {
+        context.unregisterReceiver(this);
+        receiverRegistered = false;
+      } catch (RuntimeException cleanupError) {
+        if (cleanupError != error) error.addSuppressed(cleanupError);
+      }
       throw error;
     }
   }
@@ -133,13 +145,25 @@ public final class HuaweiNetworkChangeDetector extends BroadcastReceiver
   }
 
   @Override public synchronized void destroy() {
-    if (destroyed) return;
-    registration.close();
+    // Shaling AI fork patch: stop notifications first and attempt both releases.
+    // Retain ownership of a failed release so a subsequent destroy can retry it.
+    destroyed = true;
+    RuntimeException failure = null;
+    try {
+      registration.close();
+    } catch (RuntimeException error) {
+      failure = error;
+    }
     if (receiverRegistered) {
-      context.unregisterReceiver(this);
-      receiverRegistered = false;
+      try {
+        context.unregisterReceiver(this);
+        receiverRegistered = false;
+      } catch (RuntimeException error) {
+        if (failure == null) failure = error;
+        else if (failure != error) failure.addSuppressed(error);
+      }
     }
     knownNetworks.clear();
-    destroyed = true;
+    if (failure != null) throw failure;
   }
 }

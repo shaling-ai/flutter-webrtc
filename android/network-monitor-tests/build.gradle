@@ -1,0 +1,54 @@
+// Shaling AI fork patch: exercise the detector against the pinned WebRTC API.
+plugins { id 'java' }
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+configurations { webrtcApi }
+dependencies {
+    webrtcApi 'io.github.webrtc-sdk:android:144.7559.09@aar'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.12.2'
+}
+
+def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+if (!sdkRoot) throw new GradleException('Set ANDROID_HOME to an installed Android SDK')
+def androidJar = file("${sdkRoot}/platforms/android-36/android.jar")
+def webrtcJar = layout.buildDirectory.file('webrtc/classes.jar')
+tasks.register('extractWebRtc', Copy) {
+    from { zipTree(configurations.webrtcApi.singleFile) }
+    include 'classes.jar'
+    into layout.buildDirectory.dir('webrtc')
+}
+
+dependencies {
+    implementation files(webrtcJar)
+    compileOnly files(androidJar)
+    testCompileOnly files(androidJar)
+    testRuntimeOnly files(androidJar)
+}
+sourceSets {
+    main.java {
+        srcDir '../src/main/java'
+        include 'org/webrtc/HuaweiNetworkChangeDetector.java'
+        include 'org/webrtc/PassiveNetworkRegistration.java'
+    }
+    test.java.srcDirs = ['../src/testRobolectric/java']
+}
+tasks.named('compileJava') { dependsOn 'extractWebRtc' }
+tasks.withType(JavaCompile).configureEach { options.release = 8 }
+test {
+    // The plain Java plugin does not unpack AndroidX test AAR dependencies.
+    doFirst {
+        classpath = files(classpath.files.collect {
+            it.name.endsWith('.aar') ? zipTree(it).matching { include 'classes.jar' }.singleFile : it
+        })
+    }
+    maxHeapSize = '384m'
+    maxParallelForks = 1
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
+    // Do not depend on a developer-specific Maven mirror.
+    systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+}
